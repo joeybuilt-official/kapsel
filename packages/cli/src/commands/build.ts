@@ -1,51 +1,79 @@
-import { execSync } from 'node:child_process';
-import path from 'node:path';
-import fs from 'fs-extra';
+/**
+ * kapsel build
+ * Compile TypeScript and validate manifest.
+ */
+
+import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import { spawn } from 'child_process';
 import { validateManifest } from '@kapsel/sdk';
 
-interface BuildOptions {
-  validate?: boolean;
-}
+export function buildCommand(): Command {
+  return new Command('build')
+    .description('Compile extension and validate manifest')
+    .argument('[directory]', 'Directory to build', '.')
+    .option('--no-validate', 'Skip manifest validation')
+    .action(async (directory: string, options: { validate: boolean }) => {
+      const manifestPath = path.join(directory, 'kapsel.json');
 
-export async function buildCommand(options: BuildOptions): Promise<void> {
-  const cwd = process.cwd();
-  const manifestPath = path.join(cwd, 'kapsel.json');
-
-  // Validate manifest first (unless --no-validate)
-  if (options.validate !== false) {
-    const manifestSpinner = ora('Validating manifest...').start();
-    if (!(await fs.pathExists(manifestPath))) {
-      manifestSpinner.fail('kapsel.json not found');
-      process.exit(1);
-    }
-    const raw = await fs.readJSON(manifestPath);
-    const result = validateManifest(raw);
-    if (!result.valid) {
-      manifestSpinner.fail('Manifest invalid');
-      for (const err of result.errors) {
-        console.error(chalk.yellow(`  ${err.field}: ${err.message}`));
+      // Step 1: Validate manifest
+      if (options.validate !== false) {
+        const validateSpinner = ora('Validating kapsel.json').start();
+        if (!(await fs.pathExists(manifestPath))) {
+          validateSpinner.fail(`kapsel.json not found in ${directory}`);
+          process.exit(1);
+        }
+        const raw = await fs.readJson(manifestPath);
+        const result = validateManifest(raw);
+        if (!result.valid) {
+          validateSpinner.fail('Manifest validation failed');
+          for (const err of result.errors) {
+            console.error(chalk.red(`  • ${err.field}: ${err.message}`));
+          }
+          process.exit(1);
+        }
+        validateSpinner.succeed('Manifest valid');
       }
-      process.exit(1);
-    }
-    manifestSpinner.succeed('Manifest valid');
-  }
 
-  // Compile TypeScript
-  const buildSpinner = ora('Compiling TypeScript...').start();
-  try {
-    execSync('pnpm exec tsc -p tsconfig.json', { cwd, stdio: 'pipe' });
-    buildSpinner.succeed('Build complete');
-  } catch (err: unknown) {
-    buildSpinner.fail('TypeScript compilation failed');
-    if (err && typeof err === 'object' && 'stdout' in err) {
-      console.error(String((err as { stdout: unknown }).stdout));
-    }
-    process.exit(1);
-  }
+      // Step 2: Run tsc
+      const buildSpinner = ora('Compiling TypeScript').start();
+      const tscPath = path.join(directory, 'node_modules', '.bin', 'tsc');
+      const hasTsc = await fs.pathExists(tscPath);
+      const tscBin = hasTsc ? tscPath : 'tsc';
 
-  // Read manifest and report
-  const manifest = (await fs.readJSON(manifestPath)) as Record<string, unknown>;
-  console.log(chalk.green(`\n✓ Built ${String(manifest['name'])} v${String(manifest['version'])} (${String(manifest['type'])})`));
+      await new Promise<void>((resolve, reject) => {
+        const proc = spawn(tscBin, ['-p', path.join(directory, 'tsconfig.json')], {
+          cwd: directory,
+          stdio: 'pipe',
+        });
+        let stderr = '';
+        proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+        proc.stdout?.on('data', (d: Buffer) => { stderr += d.toString(); });
+        proc.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(stderr));
+        });
+      }).then(() => {
+        buildSpinner.succeed('Compiled successfully');
+      }).catch((err: Error) => {
+        buildSpinner.fail('TypeScript compilation failed');
+        console.error(chalk.red(err.message));
+        process.exit(1);
+      });
+
+      // Step 3: Verify entry point exists
+      const manifest = await fs.readJson(manifestPath) as Record<string, unknown>;
+      const entryRelative = (manifest['entry'] as string).replace(/^\.?\//,  '');
+      const entryAbs = path.join(directory, entryRelative);
+      if (!(await fs.pathExists(entryAbs))) {
+        console.error(chalk.red(`\nEntry point not found after build: ${entryAbs}`));
+        process.exit(1);
+      }
+
+      console.log(chalk.green(`\n✓ Build complete`));
+      console.log(chalk.dim(`  Entry: ${entryAbs}\n`));
+    });
 }
