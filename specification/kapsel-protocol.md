@@ -161,6 +161,7 @@ interface KapselManifest {
   kapsel: string;
 
   // Scoped package name. MUST follow @scope/name format.
+  // Allowed characters: lowercase alphanumeric, hyphens, and dots.
   name: string;
 
   // Extension version. MUST be a valid semver string.
@@ -176,7 +177,7 @@ interface KapselManifest {
   // The host MUST reject installation if it cannot grant all declared capabilities.
   capabilities: CapabilityToken[];
 
-  // Human-readable name shown in host UI and registry.
+  // Human-readable name shown in host UI and registry. Max 50 characters.
   displayName: string;
 
   // Short description (max 280 characters).
@@ -258,13 +259,14 @@ Hosts MUST validate manifests on installation. Validation failures MUST prevent 
 
 Required validations:
 1. `kapsel` is a valid semver string supported by this host
-2. `name` matches `^@[a-z0-9-]+\/[a-z0-9-]+$`
+2. `name` matches `^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$`
 3. `version` is a valid semver string
 4. `type` is one of the five defined types
 5. `entry` path exists within the package
-6. All `capabilities` tokens are recognized (unknown tokens are rejected)
-7. `description` is ≤ 280 characters
-8. `license` is a valid SPDX expression
+6. All `capabilities` tokens are recognized (unknown tokens are rejected; host-scoped tokens emit a warning — see §4.3)
+7. `displayName` is ≤ 50 characters
+8. `description` is ≤ 280 characters
+9. `license` is a valid SPDX expression
 
 ### §3.4 Complete Example
 
@@ -379,7 +381,7 @@ The following 18 tokens are standard. Hosts at Standard or Full compliance MUST 
 | Token | Grants Access To |
 |-------|-----------------|
 | `events:subscribe` | Subscribe to Event Bus topics |
-| `events:publish` | Publish custom events (`ext.<scope>.*` namespace only) |
+| `events:publish` | Publish events to the `ext.<scope>.*` namespace only (see §7.4) |
 
 #### Storage
 
@@ -390,7 +392,11 @@ The following 18 tokens are standard. Hosts at Standard or Full compliance MUST 
 
 ### §4.3 Host-Specific Capability Extensions
 
-Hosts MAY define additional tokens namespaced as `host:<hostname>:<capability>`. Extensions using host-specific capabilities are not portable — this is acceptable and intentional. Hosts MUST reject installation of extensions that declare unrecognized capability tokens.
+Hosts MAY define additional tokens namespaced as `host:<hostname>:<capability>`. Extensions using host-specific capabilities are not portable — this is acceptable and intentional.
+
+Host-scoped tokens are not validated by the Kapsel manifest validator or registry — only the target host can determine whether they are supported and will be granted. Validators MUST treat host-scoped tokens as syntactically valid but MUST emit a warning that host-side verification is required before the extension can be installed.
+
+Hosts MUST reject installation of extensions that declare unrecognized capability tokens, including unrecognized host-scoped tokens.
 
 ---
 
@@ -542,6 +548,7 @@ type ErrorCode =
   | "MANIFEST_INVALID"
   | "VERSION_INCOMPATIBLE"
   | "EXTENSION_DISABLED"
+  | "COMPLIANCE_INSUFFICIENT"
 ```
 
 ### §6.5 Shared Payload Types
@@ -621,6 +628,12 @@ interface ToolRegistration {
   parameters: JSONSchema; // Must be type "object" at top level.
   hints?: {
     estimatedMs?: number;
+    /**
+     * Hard abort ceiling for this specific tool, in milliseconds.
+     * When set, the host MUST abort the invocation and return TIMEOUT
+     * if execution exceeds this value, overriding the host default timeout.
+     */
+    timeoutMs?: number;
     hasSideEffects?: boolean;
     idempotent?: boolean;
   };
@@ -694,7 +707,25 @@ The Channel Router manages outbound message delivery across all active channel e
 
 The Event Bus provides loosely coupled pub/sub coordination between extensions.
 
-**Standard topics:**
+#### Topic Namespaces
+
+Topics are divided into two namespaces with strictly different access rules:
+
+**Host namespace** — topics owned and published exclusively by the host runtime. Extensions MUST subscribe to host topics read-only. Extensions MUST NOT publish to any host-owned topic.
+
+Host topic prefixes (exhaustive): `task.`, `sprint.`, `channel.`, `connection.`, `agent.`, `extension.`, `memory.`, `system.`
+
+Hosts MUST enforce this at the message protocol level: `sdk.events.publish` called with a topic matching any host prefix MUST be rejected with `CAPABILITY_DENIED`, regardless of the extension's declared capabilities.
+
+**Extension namespace** — topics owned by extensions. Format: `ext.<scope>.<name>.<event>`.
+
+Examples:
+- `ext.acme.stripe-monitor.mrr-alert`
+- `ext.myorg.github-ops.pr-merged`
+
+Extensions MUST only publish to topics within their own `ext.<scope>.*` namespace. An extension from `@acme/stripe-monitor` MUST NOT publish to `ext.otherscope.*` topics. Hosts MUST enforce this scope check at call time.
+
+#### Standard Host Topics
 
 | Topic | Published When | Payload |
 |-------|---------------|---------|
@@ -711,8 +742,6 @@ The Event Bus provides loosely coupled pub/sub coordination between extensions.
 | `connection.removed` | Service connection removed | `{ service, connectionId }` |
 | `memory.written` | Memory entry created or updated | `{ entryId, tags }` |
 
-**Custom events:** Topics MUST be namespaced `ext.<scope>.<name>.<event>`. Example: `ext.acme.stripe-monitor.mrr-alert`.
-
 **Delivery guarantees:** At-most-once within a host runtime. Events are not persisted across host restarts.
 
 ### §7.5 Memory Layer
@@ -726,6 +755,7 @@ interface MemoryEntry {
   id: string;
   content: string;        // Text content. Indexed for semantic search.
   tags?: string[];        // Max 20 per entry.
+  /** The extension that wrote this entry. Format: @scope/name */
   authorExtension: string;
   metadata?: Record<string, unknown>;
   createdAt: number;
@@ -789,6 +819,12 @@ interface AgentExtension {
 
 ```typescript
 interface Plan {
+  /**
+   * Monotonically increasing version number. Starts at 1.
+   * The host increments this when an agent re-plans mid-execution (e.g. after escalation recovery).
+   * Hosts MUST use this to avoid replaying steps already completed under a prior plan version.
+   */
+  version: number;
   goalRestatement: string;  // Agent's restatement of the goal. Sent to user.
   steps: PlanStep[];
   estimatedMs?: number;
@@ -830,7 +866,14 @@ interface StepResult {
   summary: string;     // Max 200 tokens.
   toolCalls: ToolCall[];
   output?: unknown;
+  /** Whether execution can proceed to the next step. */
   canContinue: boolean;
+  /**
+   * Required when canContinue is false.
+   * Describes why execution was halted so the host can surface a meaningful
+   * message to the user and decide whether to escalate or await input.
+   */
+  blockedReason?: string;
 }
 
 interface ToolCall {
@@ -961,6 +1004,7 @@ Hosts MUST:
 | `INVALID_PARAMS` | No | — |
 | `CONNECTION_UNAVAILABLE` | No (user action required) | — |
 | `EXTENSION_DISABLED` | No (user action required) | — |
+| `COMPLIANCE_INSUFFICIENT` | No (host limitation) | — |
 
 ---
 
@@ -990,9 +1034,43 @@ During 0.x, breaking changes MAY occur in minor versions. After 1.0, strict semv
 // Available in activate() context
 sdk.host.kapselVersion   // e.g., "0.2.0"
 sdk.host.complianceLevel // e.g., "full"
-sdk.host.name            // e.g., "plexo"
+sdk.host.name            // e.g., "my-host"
 sdk.host.version         // e.g., "1.4.2"
 ```
+
+### §11.4 Runtime Capability Negotiation
+
+An extension MAY declare a minimum host compliance level via `minHostLevel` in its manifest. The host MUST enforce this at **install time** by rejecting the installation with `COMPLIANCE_INSUFFICIENT` if its compliance level is below the declared minimum.
+
+For extensions that want to conditionally use features based on what the host supports at runtime, the following pattern applies:
+
+```typescript
+export async function activate(sdk: KapselSDK): Promise<void> {
+  const level = sdk.host.complianceLevel;
+
+  if (level === 'full') {
+    // Event Bus is available — subscribe to host topics
+    sdk.events.subscribe('task.completed', async (payload) => {
+      // react to task completion
+    });
+  } else {
+    // Standard host — fall back to polling via cron
+    sdk.registerSchedule({
+      name: 'poll_tasks',
+      schedule: '*/5 * * * *',
+      timezone: 'UTC',
+      handler: async () => { /* poll instead */ },
+    });
+  }
+}
+```
+
+**Rules:**
+
+1. If `minHostLevel` is declared and the host is below that level, the host MUST reject installation with `COMPLIANCE_INSUFFICIENT` before `activate()` is ever called.
+2. If `minHostLevel` is not declared (defaults to `core`), the extension MAY inspect `sdk.host.complianceLevel` at runtime and adapt accordingly.
+3. If an extension calls an SDK method that requires a compliance level the host does not implement, the host MUST return `NOT_IMPLEMENTED`. Hosts MUST NOT silently no-op these calls.
+4. Extensions SHOULD degrade gracefully rather than fail hard when optional compliance features are unavailable. If graceful degradation is impossible, the extension SHOULD throw from `activate()` with a descriptive error message rather than silently malfunctioning at runtime.
 
 ---
 
@@ -1053,9 +1131,34 @@ GET /extensions/:scope/:name/:version
   "manifest": { ...kapsel.json... },
   "tarballUrl": "...",
   "publishedAt": 1709123456789,
-  "shasum": "sha256:abc123..."
+  "shasum": "sha256:abc123...",
+  "deprecated": false,
+  "deprecationReason": null
 }
 ```
+
+#### Deprecate / Un-deprecate a Version
+
+Marks a published version as unsafe without removing it. Deprecated versions remain downloadable (existing installs are not force-removed) but MUST be surfaced with a warning in all registry responses and host UI. Hosts MUST warn users before installing a deprecated version.
+
+```
+PATCH /extensions/:scope/:name/:version
+Authorization: Bearer <publisher-token>
+Content-Type: application/json
+Body: { "deprecated": true, "deprecationReason": "Critical security vulnerability — upgrade to 1.2.1" }
+
+200: {
+  "name": "@scope/name",
+  "version": "1.0.0",
+  "deprecated": true,
+  "deprecationReason": "Critical security vulnerability — upgrade to 1.2.1"
+}
+401: Unauthorized
+403: Token scope mismatch
+404: Version not found
+```
+
+To un-deprecate: send `{ "deprecated": false }`. `deprecationReason` is ignored when `deprecated` is false and MUST be cleared by the registry.
 
 #### Search Extensions
 
@@ -1065,10 +1168,19 @@ GET /search?q=stripe&type=skill&limit=20&offset=0
 200: {
   "total": 7,
   "results": [
-    { "name": "@acme/stripe-monitor", "type": "skill", "displayName": "...", "latestVersion": "1.2.0", "downloads": { "weekly": 142 } }
+    {
+      "name": "@acme/stripe-monitor",
+      "type": "skill",
+      "displayName": "...",
+      "latestVersion": "1.2.0",
+      "downloads": { "weekly": 142 },
+      "deprecated": false
+    }
   ]
 }
 ```
+
+`deprecated` in search results reflects whether the **latest version** is deprecated. Hosts SHOULD visually distinguish deprecated extensions in their marketplace UI.
 
 #### Download Tarball
 
@@ -1078,6 +1190,8 @@ GET /extensions/:scope/:name/:version.tar.gz
 200: Binary .tar.gz stream
 404: Not found
 ```
+
+Hosts SHOULD warn users before downloading a tarball for a deprecated version.
 
 #### Publisher Authentication
 
@@ -1164,7 +1278,7 @@ Minimum viable Kapsel host.
 - At least one isolation mechanism (§5)
 - At least one extension type fully supported (§2)
 - Lifecycle hooks: `activate`, `deactivate` (§9)
-- All standard error codes (§6.4)
+- All standard error codes including `COMPLIANCE_INSUFFICIENT` (§6.4)
 - Message protocol for supported extension types (§6)
 
 ### §14.2 Standard
@@ -1174,7 +1288,7 @@ Full-featured host capable of multi-extension workflows.
 **Requirements:** Everything in Core, plus:
 - All five extension types (§2)
 - All 18 standard capability tokens (§4.2)
-- Tool Registry with collision handling (§7.1)
+- Tool Registry with collision handling and `timeoutMs` enforcement (§7.1)
 - Task Router with confidence-based routing (§7.2)
 - Channel Router with health-based failover (§7.3)
 - Memory Layer (§7.5)
@@ -1182,18 +1296,20 @@ Full-featured host capable of multi-extension workflows.
 - One-way door protocol (§8.4)
 - Quality scoring for standard task types (§8.6)
 - Registry integration: install from a registry (§12)
+- `minHostLevel` enforcement at install time (§11.4)
 
 ### §14.3 Full
 
 Production-grade host supporting autonomous multi-agent workflows.
 
 **Requirements:** Everything in Standard, plus:
-- Event Bus with all standard topics (§7.4)
+- Event Bus with all standard topics and namespace enforcement (§7.4)
 - Multi-agent routing: concurrent `shouldActivate`, confidence tiebreaking
 - Agent escalation and recovery (`onEscalation`) (§8.5)
-- Registry: publish and discover (§12.1)
+- Registry: publish, discover, and deprecate (§12.1)
 - All lifecycle hooks including `onConfigUpdate` (§9)
-- Complete retry policy (§10.3)
+- Complete retry policy including `COMPLIANCE_INSUFFICIENT` (§10.3)
+- Runtime capability negotiation: `NOT_IMPLEMENTED` on unsupported SDK calls (§11.4)
 
 ### §14.4 Declaring Compliance
 
@@ -1254,7 +1370,16 @@ interface KapselSDK {
   };
 
   events: {
+    /**
+     * Subscribe to any topic. Extensions may subscribe to host-owned topics.
+     * Returns an unsubscribe function.
+     */
     subscribe(topic: string, handler: (payload: unknown) => Promise<void>): () => void;
+    /**
+     * Publish to the ext.<scope>.* namespace only.
+     * Publishing to host-owned topic prefixes returns CAPABILITY_DENIED.
+     * Publishing outside the extension's own scope returns CAPABILITY_DENIED.
+     */
     publish(topic: string, payload: unknown): Promise<void>;
     unsubscribe(topic: string): void;
   };
@@ -1263,7 +1388,8 @@ interface KapselSDK {
     get<T = unknown>(key: string): Promise<T | null>;
     set<T = unknown>(key: string, value: T, options?: { ttl?: number }): Promise<void>;
     delete(key: string): Promise<void>;
-    list(prefix?: string): Promise<string[]>;
+    /** Returns up to options.limit keys (default 1000, max 1000). */
+    list(prefix?: string, options?: { limit?: number }): Promise<string[]>;
   };
 
   tools: {
@@ -1283,7 +1409,8 @@ interface ConnectionCredentials {
 
 interface ScheduleRegistration {
   name: string;
-  schedule: string; // 5-field cron expression
+  schedule: string;    // 5-field cron expression
+  timezone?: string;   // IANA timezone string (e.g. 'America/New_York'). Defaults to 'UTC'.
   handler(): Promise<void>;
 }
 
@@ -1293,6 +1420,19 @@ interface WidgetRegistration {
   displayType: "metric" | "chart" | "list" | "status" | "custom";
   refreshInterval: number; // seconds
   dataHandler(config: unknown): Promise<unknown>;
+}
+
+interface ToolRegistration {
+  name: string;
+  description: string; // Max 500 chars. Shown to agents.
+  parameters: JSONSchema; // Must be type "object" at top level.
+  hints?: {
+    estimatedMs?: number;
+    timeoutMs?: number;      // Hard abort ceiling. Overrides host default for this tool.
+    hasSideEffects?: boolean;
+    idempotent?: boolean;
+  };
+  handler(params: unknown, context: InvokeContext): Promise<unknown>;
 }
 
 interface ToolSummary {
@@ -1311,9 +1451,9 @@ type NotificationLevel = "info" | "warning" | "error";
 
 | From \ To | Tool Registry | Task Router | Channel Router | Event Bus | Memory | Tasks | Storage |
 |-----------|:------------:|:-----------:|:--------------:|:---------:|:------:|:-----:|:-------:|
-| **Agent** | Invoke | Create sub-tasks | Send | Sub + Pub | R/W | Create, Read All | R/W |
-| **Skill** | Register + Invoke | — | Send | Sub + Pub | R/W | — | R/W |
-| **Channel** | — | Route inbound | Register + health | Sub only | — | — | R/W |
+| **Agent** | Invoke | Create sub-tasks | Send | Sub + Pub (ext.scope.* only) | R/W | Create, Read All | R/W |
+| **Skill** | Register + Invoke | — | Send | Sub + Pub (ext.scope.* only) | R/W | — | R/W |
+| **Channel** | — | Route inbound | Register + health | Subscribe only | — | — | R/W |
 | **Tool** | Register | — | — | — | R/W | — | R/W |
 | **MCP Server** | Register (bridged) | — | — | — | — | — | — |
 
