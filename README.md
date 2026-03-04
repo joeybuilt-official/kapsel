@@ -95,7 +95,20 @@ MCP defines how an LLM calls a tool. Kapsel defines how that tool — and agents
 
 ## Quick Start
 
-### 1. Define your extension
+### Install
+
+```bash
+npm install -g @kapsel/cli
+```
+
+### 1. Scaffold a new extension
+
+```bash
+kapsel init
+# Prompts for scope, name, type, description
+```
+
+### 2. Define your manifest (`kapsel.json`)
 
 ```json
 {
@@ -119,7 +132,7 @@ MCP defines how an LLM calls a tool. Kapsel defines how that tool — and agents
 }
 ```
 
-### 2. Implement it
+### 3. Implement it
 
 ```typescript
 import type { KapselSDK } from '@kapsel/sdk';
@@ -144,7 +157,7 @@ export async function activate(sdk: KapselSDK): Promise<void> {
   });
 
   // Register a cron job
-  sdk.schedule.register({
+  sdk.registerSchedule({
     name: 'daily_mrr_report',
     schedule: '0 8 * * *',
     handler: async () => {
@@ -157,20 +170,41 @@ export async function activate(sdk: KapselSDK): Promise<void> {
   });
 
   // Register a dashboard widget
-  sdk.ui.registerWidget({
+  sdk.registerWidget({
     name: 'mrr_card',
     displayName: 'Monthly Recurring Revenue',
     displayType: 'metric',
     refreshInterval: 300,
     dataHandler: async () => {
       const mrr = await sdk.tools.invoke('stripe_get_mrr', {});
-      return { value: mrr.mrr / 100, label: 'MRR', unit: '$', trend: '+4.2%' };
+      return { value: mrr.mrr / 100, label: 'MRR', unit: '$' };
     }
   });
 }
 ```
 
-### 3. An agent uses it automatically
+### 4. Build and validate
+
+```bash
+kapsel build
+kapsel validate
+```
+
+### 5. Test locally (no host required)
+
+```typescript
+import { createMockSdk, triggerSchedule, getSentMessages } from '@kapsel/sdk-mock';
+import { activate } from './src/index.js';
+
+const sdk = createMockSdk({
+  connections: { stripe: { type: 'api_key', data: { key: 'sk_test_...' } } }
+});
+await activate(sdk);
+await triggerSchedule(sdk, 'daily_mrr_report');
+console.log(getSentMessages(sdk)); // [{ text: 'Daily MRR: $10542.00', priority: 'normal' }]
+```
+
+### 6. An agent uses it automatically
 
 When a user asks "give me a revenue report," any Kapsel-compatible agent sees `stripe_get_mrr` in the Tool Registry and includes it in its plan. The host executes the tool in your extension's worker with your extension's credentials. The agent never touches Stripe directly.
 
@@ -294,14 +328,14 @@ kapsel-core/
 ├── specification/
 │   └── kapsel-protocol.md       # The protocol spec (canonical)
 ├── packages/
-│   ├── sdk/                     # @kapsel/sdk — TypeScript SDK (planned)
-│   ├── sdk-mock/                # @kapsel/sdk-mock — test harness (planned)
-│   ├── cli/                     # @kapsel/cli — scaffold/build/publish (planned)
-│   └── registry/                # @kapsel/registry — reference server (planned)
+│   ├── sdk/                     # @kapsel/sdk — TypeScript types and interfaces
+│   ├── sdk-mock/                # @kapsel/sdk-mock — in-memory test harness
+│   ├── cli/                     # @kapsel/cli — scaffold, build, validate, publish
+│   └── registry/                # @kapsel/registry — reference registry server
 ├── examples/
-│   ├── skill-stripe-monitor/    # Example skill extension (planned)
-│   ├── agent-devops/            # Example agent extension (planned)
-│   └── channel-telegram/        # Example channel extension (planned)
+│   ├── skill-stripe-monitor/    # Skill: MRR tracking, daily reports, dashboard widget
+│   ├── agent-devops/            # Agent: deployment tasks, CI monitoring, escalation
+│   └── channel-telegram/        # Channel: bidirectional Telegram messaging
 ├── CONTRIBUTING.md
 ├── LICENSE                      # Apache 2.0
 └── README.md
@@ -309,16 +343,28 @@ kapsel-core/
 
 ---
 
+## Packages
+
+| Package | Version | Description |
+|---------|---------|-------------|
+| [`@kapsel/sdk`](./packages/sdk) | 0.2.0 | TypeScript types and interfaces for building extensions |
+| [`@kapsel/sdk-mock`](./packages/sdk-mock) | 0.2.0 | In-memory mock host for local testing |
+| [`@kapsel/cli`](./packages/cli) | 0.2.0 | `kapsel init / build / validate / publish` |
+| [`@kapsel/registry`](./packages/registry) | 0.2.0 | Reference registry server (SQLite + Express) |
+
+---
+
 ## Roadmap
 
 | Phase | Status | Milestone |
 |-------|--------|-----------|
-| Protocol spec v0.2.0 | ✅ Draft | Core interaction model defined |
-| Reference host (Plexo) | 🔨 Building | First Level 3 implementation |
-| @kapsel/sdk | Planned | TypeScript SDK for extension developers |
-| @kapsel/sdk-mock | Planned | Local testing without a running host |
-| @kapsel/cli | Planned | Scaffold, build, publish workflow |
-| @kapsel/registry | Planned | Reference registry server |
+| Protocol spec v0.2.0 | ✅ Done | Full 15-section spec with appendices |
+| @kapsel/sdk | ✅ Done | TypeScript SDK — types, interfaces, validation |
+| @kapsel/sdk-mock | ✅ Done | In-memory test harness |
+| @kapsel/cli | ✅ Done | Scaffold, build, validate, publish |
+| @kapsel/registry | ✅ Done | Reference registry server |
+| Examples | ✅ Done | skill-stripe-monitor, agent-devops, channel-telegram |
+| Reference host (Plexo) | 🔨 Building | First Level 3 (Full) implementation |
 | Second host implementation | Planned | Required for spec v1.0 |
 | Spec v1.0 | Planned | Stable after 2+ hosts, 50+ extensions, public comment |
 
@@ -326,7 +372,7 @@ kapsel-core/
 
 ## Contributing
 
-Kapsel is in early draft. This is the best time to shape it.
+Kapsel is in active early development. This is the best time to shape it.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
