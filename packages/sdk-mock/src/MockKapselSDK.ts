@@ -21,6 +21,19 @@ import type {
 } from '@kapsel/sdk';
 import type { OutboundMessage, MessagePriority, Attachment } from '@kapsel/sdk';
 
+const HOST_TOPIC_PREFIXES = [
+  'task.',
+  'sprint.',
+  'connection.',
+  'channel.',
+  'agent.',
+  'system.',
+];
+
+function isHostOwnedTopic(topic: string): boolean {
+  return HOST_TOPIC_PREFIXES.some((p) => topic.startsWith(p));
+}
+
 export interface MockSentMessage {
   text: string;
   priority: MessagePriority;
@@ -53,9 +66,9 @@ export interface MockSDKState {
   createdTaskIds: string[];
 }
 
-let idCounter = 0;
 function genId(): string {
-  return `mock-${++idCounter}-${Date.now()}`;
+  // Use crypto.randomUUID() — safe for parallel test runs, no shared counter
+  return `mock-${crypto.randomUUID()}`;
 }
 
 export function createMockSdk(options: MockSDKOptions = {}): KapselSDK & { _state: MockSDKState } {
@@ -111,7 +124,8 @@ export function createMockSdk(options: MockSDKOptions = {}): KapselSDK & { _stat
             if (tags && tags.length > 0) {
               return tags.some((t) => e.tags?.includes(t));
             }
-            return e.content.toLowerCase().includes(query.toLowerCase());
+            if (query) return e.content.toLowerCase().includes(query.toLowerCase());
+            return true;
           })
           .slice(0, limit);
       },
@@ -219,6 +233,11 @@ export function createMockSdk(options: MockSDKOptions = {}): KapselSDK & { _stat
       },
 
       async publish(topic, payload) {
+        if (isHostOwnedTopic(topic)) {
+          throw new Error(
+            `Mock: extensions may not publish to host-owned topic "${topic}". Use the ext.<scope>.* namespace.`
+          );
+        }
         state.publishedEvents.push({ topic, payload });
         const handlers = state.eventSubscriptions.get(topic) ?? [];
         await Promise.all(handlers.map((h) => h(payload)));
@@ -251,9 +270,11 @@ export function createMockSdk(options: MockSDKOptions = {}): KapselSDK & { _stat
         state.storage.delete(key);
       },
 
-      async list(prefix?: string): Promise<string[]> {
+      async list(prefix?: string, opts?: { limit?: number }): Promise<string[]> {
+        const limit = opts?.limit ?? 1000;
         const keys = Array.from(state.storage.keys());
-        return prefix ? keys.filter((k) => k.startsWith(prefix)) : keys;
+        const filtered = prefix ? keys.filter((k) => k.startsWith(prefix)) : keys;
+        return filtered.slice(0, limit);
       },
     },
 
@@ -265,6 +286,7 @@ export function createMockSdk(options: MockSDKOptions = {}): KapselSDK & { _stat
           workspaceId: 'mock-workspace',
           requestId: genId(),
         };
+        // Propagate handler errors — do not swallow
         return tool.handler(params, context) as Promise<T>;
       },
 

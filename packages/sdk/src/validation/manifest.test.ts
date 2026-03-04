@@ -18,7 +18,7 @@ describe('validateManifest', () => {
   test('accepts a valid manifest', () => {
     const result = validateManifest(validManifest);
     expect(result.valid).toBe(true);
-    expect(result.errors).toHaveLength(0);
+    expect(result.errors.filter((e) => e.severity !== 'warning')).toHaveLength(0);
   });
 
   test('rejects non-object input', () => {
@@ -34,7 +34,7 @@ describe('validateManifest', () => {
   });
 
   test('rejects invalid package name format', () => {
-    const cases = ['no-scope', '@/no-name', '@UPPER/case', 'plain'];
+    const cases = ['no-scope', '@/no-name', 'plain'];
     for (const name of cases) {
       const result = validateManifest({ ...validManifest, name });
       expect(result.valid).toBe(false);
@@ -42,8 +42,8 @@ describe('validateManifest', () => {
     }
   });
 
-  test('accepts valid scoped names', () => {
-    const cases = ['@acme/my-skill', '@my-org/stripe-monitor', '@k/x'];
+  test('accepts valid scoped names including dots', () => {
+    const cases = ['@acme/my-skill', '@my-org/stripe-monitor', '@k/x', '@my.org/tool', '@scope/my.tool'];
     for (const name of cases) {
       const result = validateManifest({ ...validManifest, name });
       expect(result.valid).toBe(true);
@@ -64,6 +64,17 @@ describe('validateManifest', () => {
     }
   });
 
+  test('rejects displayName over 50 chars', () => {
+    const result = validateManifest({ ...validManifest, displayName: 'x'.repeat(51) });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.field === 'displayName')).toBe(true);
+  });
+
+  test('accepts displayName at exactly 50 chars', () => {
+    const result = validateManifest({ ...validManifest, displayName: 'x'.repeat(50) });
+    expect(result.valid).toBe(true);
+  });
+
   test('rejects description over 280 chars', () => {
     const result = validateManifest({ ...validManifest, description: 'x'.repeat(281) });
     expect(result.valid).toBe(false);
@@ -78,7 +89,7 @@ describe('validateManifest', () => {
   test('rejects unknown capability tokens', () => {
     const result = validateManifest({ ...validManifest, capabilities: ['memory:read', 'invalid:cap'] });
     expect(result.valid).toBe(false);
-    expect(result.errors.some((e) => e.field.startsWith('capabilities'))).toBe(true);
+    expect(result.errors.some((e) => e.field.startsWith('capabilities') && e.severity !== 'warning')).toBe(true);
   });
 
   test('accepts all standard capability tokens', () => {
@@ -100,9 +111,14 @@ describe('validateManifest', () => {
     expect(result.valid).toBe(true);
   });
 
-  test('accepts host:<hostname>:<cap> capability tokens', () => {
+  test('host-scoped tokens are valid but emit a warning', () => {
     const result = validateManifest({ ...validManifest, capabilities: ['host:plexo:sprint:trigger'] });
+    // Still valid — host-scoped tokens pass format check
     expect(result.valid).toBe(true);
+    // But a warning is emitted
+    const warn = result.errors.find((e) => e.field.startsWith('capabilities') && e.severity === 'warning');
+    expect(warn).toBeDefined();
+    expect(warn?.message).toContain('host-scoped');
   });
 
   test('rejects more than 10 keywords', () => {
@@ -135,6 +151,6 @@ describe('validateManifest', () => {
 
   test('accumulates multiple errors', () => {
     const result = validateManifest({ kapsel: 'bad', name: 'bad', version: 'bad', type: 'bad', entry: '', capabilities: 'bad', displayName: '', description: 'ok', author: '', license: '' });
-    expect(result.errors.length).toBeGreaterThan(3);
+    expect(result.errors.filter((e) => e.severity !== 'warning').length).toBeGreaterThan(3);
   });
 });

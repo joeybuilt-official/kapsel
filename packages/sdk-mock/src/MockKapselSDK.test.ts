@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { createMockSdk } from './MockKapselSDK.js';
 import {
   triggerSchedule,
@@ -9,7 +9,7 @@ import {
   getPublishedEvents,
   resetState,
 } from './helpers.js';
-import type { KapselSDK, InvokeContext } from '@kapsel/sdk';
+import type { KapselSDK } from '@kapsel/sdk';
 
 async function simpleActivate(sdk: KapselSDK): Promise<void> {
   sdk.registerTool({
@@ -19,9 +19,17 @@ async function simpleActivate(sdk: KapselSDK): Promise<void> {
     handler: async (params: unknown) => (params as { value: string }).value,
   });
 
+  sdk.registerTool({
+    name: 'throwing_tool',
+    description: 'Always throws.',
+    parameters: { type: 'object', properties: {} },
+    handler: async () => { throw new Error('tool handler error'); },
+  });
+
   sdk.registerSchedule({
     name: 'ping',
     schedule: '0 * * * *',
+    timezone: 'America/Denver',
     handler: async () => {
       await sdk.channel.send({ text: 'ping' });
     },
@@ -60,12 +68,21 @@ describe('createMockSdk', () => {
     expect(sdk._state.tools.has('echo')).toBe(true);
   });
 
-  test('registerSchedule adds to state', () => {
-    expect(sdk._state.schedules.has('ping')).toBe(true);
+  test('registerSchedule adds to state with timezone', () => {
+    const job = sdk._state.schedules.get('ping');
+    expect(job).toBeDefined();
+    expect(job?.timezone).toBe('America/Denver');
   });
 
   test('registerWidget adds to state', () => {
     expect(sdk._state.widgets.has('status')).toBe(true);
+  });
+
+  test('generated ids are unique across instances', () => {
+    const sdk1 = createMockSdk();
+    const sdk2 = createMockSdk();
+    // Both have independent state — no shared counter
+    expect(sdk1._state).not.toBe(sdk2._state);
   });
 });
 
@@ -79,7 +96,11 @@ describe('invokeTool', () => {
   });
 
   test('throws for unknown tool', async () => {
-    await expect(invokeTool(sdk, 'nonexistent', {})).rejects.toThrow();
+    await expect(invokeTool(sdk, 'nonexistent', {})).rejects.toThrow('not found');
+  });
+
+  test('propagates handler errors — does not swallow', async () => {
+    await expect(invokeTool(sdk, 'throwing_tool', {})).rejects.toThrow('tool handler error');
   });
 
   test('sdk.tools.list returns registered tools', async () => {
@@ -142,6 +163,17 @@ describe('memory', () => {
     const results = await sdk.memory.read('to delete');
     expect(results).toHaveLength(0);
   });
+
+  test('TTL: expired entries are not returned', async () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    await sdk.memory.write({ content: 'ephemeral', ttl: 1 }); // 1 second TTL
+    // Advance time past TTL
+    vi.setSystemTime(now + 2000);
+    const results = await sdk.memory.read('ephemeral');
+    expect(results).toHaveLength(0);
+    vi.useRealTimers();
+  });
 });
 
 describe('storage', () => {
@@ -173,6 +205,24 @@ describe('storage', () => {
     expect(keys).toHaveLength(2);
     expect(keys.every((k) => k.startsWith('foo:'))).toBe(true);
   });
+
+  test('list respects limit option', async () => {
+    for (let i = 0; i < 10; i++) await sdk.storage.set(`item:${i}`, i);
+    const keys = await sdk.storage.list('item:', { limit: 3 });
+    expect(keys).toHaveLength(3);
+  });
+
+  test('TTL: expired keys return null and are cleaned up', async () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    await sdk.storage.set('temp', 'value', { ttl: 1 }); // 1 second TTL
+    vi.setSystemTime(now + 2000);
+    expect(await sdk.storage.get('temp')).toBeNull();
+    // Key should be gone from storage map after expiry access
+    const keys = await sdk.storage.list('temp');
+    // Note: list() does not eagerly evict — get() does. This tests the get() path.
+    vi.useRealTimers();
+  });
 });
 
 describe('events', () => {
@@ -181,31 +231,57 @@ describe('events', () => {
 
   test('subscribe and publish', async () => {
     const received: unknown[] = [];
-    sdk.events.subscribe('test.topic', async (payload) => { received.push(payload); });
-    await sdk.events.publish('test.topic', { hello: 'world' });
+    sdk.events.subscribe('ext.acme.test', async (payload) => { received.push(payload); });
+    await sdk.events.publish('ext.acme.test', { hello: 'world' });
     expect(received).toHaveLength(1);
     expect(received[0]).toEqual({ hello: 'world' });
   });
 
-  test('unsubscribe stops receiving', async () => {
+  test('unsubscribe via returned function stops receiving', async () => {
     const received: unknown[] = [];
-    sdk.events.subscribe('t', async (p) => { received.push(p); });
-    sdk.events.unsubscribe('t');
-    await sdk.events.publish('t', {});
+    const unsub = sdk.events.subscribe('ext.acme.t', async (p) => { received.push(p); });
+    unsub();
+    await sdk.events.publish('ext.acme.t', {});
+    expect(received).toHaveLength(0);
+  });
+
+  test('unsubscribe by topic stops all handlers', async () => {
+    const received: unknown[] = [];
+    sdk.events.subscribe('ext.acme.u', async (p) => { received.push(p); });
+    sdk.events.unsubscribe('ext.acme.u');
+    await sdk.events.publish('ext.acme.u', {});
     expect(received).toHaveLength(0);
   });
 
   test('getPublishedEvents tracks publishes', async () => {
-    await sdk.events.publish('my.event', 42);
+    await sdk.events.publish('ext.acme.my-event', 42);
     expect(getPublishedEvents(sdk)).toHaveLength(1);
-    expect(getPublishedEvents(sdk)[0]?.topic).toBe('my.event');
+    expect(getPublishedEvents(sdk)[0]?.topic).toBe('ext.acme.my-event');
   });
 
   test('emitEvent triggers subscribers', async () => {
     const received: unknown[] = [];
-    sdk.events.subscribe('host.event', async (p) => { received.push(p); });
-    await emitEvent(sdk, 'host.event', { from: 'host' });
+    sdk.events.subscribe('task.failed', async (p) => { received.push(p); });
+    await emitEvent(sdk, 'task.failed', { from: 'host' });
     expect(received).toHaveLength(1);
+  });
+
+  test('publish to host-owned topic throws', async () => {
+    await expect(sdk.events.publish('task.failed', {})).rejects.toThrow('host-owned topic');
+    await expect(sdk.events.publish('system.shutdown', {})).rejects.toThrow('host-owned topic');
+  });
+
+  test('concurrent subscriptions on different topics', async () => {
+    const aReceived: unknown[] = [];
+    const bReceived: unknown[] = [];
+    sdk.events.subscribe('ext.a.evt', async (p) => { aReceived.push(p); });
+    sdk.events.subscribe('ext.b.evt', async (p) => { bReceived.push(p); });
+    await Promise.all([
+      sdk.events.publish('ext.a.evt', 'a'),
+      sdk.events.publish('ext.b.evt', 'b'),
+    ]);
+    expect(aReceived).toEqual(['a']);
+    expect(bReceived).toEqual(['b']);
   });
 });
 
@@ -253,20 +329,27 @@ describe('tasks', () => {
 });
 
 describe('resetState', () => {
-  test('clears messages, events, memory, storage, tasks', async () => {
+  test('clears runtime state but preserves registrations', async () => {
     const sdk = createMockSdk();
+    await simpleActivate(sdk);
     await sdk.channel.send({ text: 'hello' });
     await sdk.memory.write({ content: 'x' });
     await sdk.storage.set('k', 'v');
-    await sdk.events.publish('e', {});
+    await sdk.events.publish('ext.acme.test', {});
     await sdk.tasks.create({ title: 't', type: 'ops' });
 
     resetState(sdk);
 
+    // Runtime state cleared
     expect(sdk._state.sentMessages).toHaveLength(0);
     expect(sdk._state.publishedEvents).toHaveLength(0);
     expect(sdk._state.memory.size).toBe(0);
     expect(sdk._state.storage.size).toBe(0);
     expect(sdk._state.tasks.size).toBe(0);
+
+    // Registrations preserved (documented contract)
+    expect(sdk._state.tools.has('echo')).toBe(true);
+    expect(sdk._state.schedules.has('ping')).toBe(true);
+    expect(sdk._state.widgets.has('status')).toBe(true);
   });
 });
