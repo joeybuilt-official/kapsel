@@ -1,0 +1,37 @@
+{
+  "kapsel": "0.2.0",
+  "name": "@kapsel/channel-telegram",
+  "version": "1.0.0",
+  "type": "channel",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "channel:receive",
+    "channel:send",
+    "storage:read",
+    "storage:write",
+    "events:subscribe"
+  ],
+  "displayName": "Telegram",
+  "description": "Bidirectional Telegram messaging. Receive commands and send notifications via a Telegram bot.",
+  "author": "kapsel",
+  "license": "Apache-2.0",
+  "keywords": ["telegram", "messaging", "channel", "notifications"],
+  "channelConfig": {
+    "type": "object",
+    "properties": {
+      "botToken": {
+        "type": "string",
+        "description": "Telegram Bot API token from @BotFather"
+      },
+      "allowedChatIds": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Restrict to specific chat IDs. Leave empty to allow any paired user."
+      }
+    },
+    "required": ["botToken"]
+  },
+  "resourceHints": {
+    "maxMemoryMB": 64
+  }
+}
