@@ -3,7 +3,7 @@
 **Version:** 0.2.0-draft  
 **Status:** Draft  
 **Date:** March 2026  
-**Repository:** https://github.com/Kapsel-Protocol/kapsel-core
+**Repository:** https://github.com/joeybuilt-official/kapsel
 
 ---
 
@@ -717,7 +717,7 @@ Host topic prefixes (exhaustive): `task.`, `sprint.`, `channel.`, `connection.`,
 
 Hosts MUST enforce this at the message protocol level: `sdk.events.publish` called with a topic matching any host prefix MUST be rejected with `CAPABILITY_DENIED`, regardless of the extension's declared capabilities.
 
-**Extension namespace** — topics owned by extensions. Format: `ext.<scope>.<name>.<event>`.
+**Extension namespace** — topics owned by extensions. Format: `ext.<scope>.<n>.<event>`.
 
 Examples:
 - `ext.acme.stripe-monitor.mrr-alert`
@@ -1473,4 +1473,4 @@ type NotificationLevel = "info" | "warning" | "error";
 
 ---
 
-*Kapsel Protocol v0.2.0-draft — Apache 2.0 — https://github.com/Kapsel-Protocol/kapsel-core*
+*Kapsel Protocol v0.2.0-draft — Apache 2.0 — https://github.com/joeybuilt-official/kapsel*

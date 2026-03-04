@@ -323,7 +323,7 @@ Hosts declare their compliance level:
 ## Project Structure
 
 ```
-kapsel-core/
+kapsel/
 ├── specification/
 │   └── kapsel-protocol.md       # The protocol spec (canonical)
 ├── packages/
@@ -364,7 +364,7 @@ kapsel-core/
 | @kapsel/registry | ✅ Done | Reference registry server |
 | Examples | ✅ Done | skill-stripe-monitor, agent-devops, channel-telegram |
 | First host implementation | 🔨 In progress | First Full-compliance host — opens the extension ecosystem |
-| Registry deprecation API | Planned | `PATCH /extensions/:scope/:name/:version` to mark versions unsafe |
+| Registry deprecation API | ✅ Done | `PATCH /extensions/:scope/:name/:version` to mark versions unsafe |
 | Second host implementation | Planned | Required for spec v1.0 — validates the protocol is host-agnostic |
 | Spec v1.0 | Planned | Stable after 2+ hosts, 50+ extensions, public comment period |
 
@@ -395,6 +395,6 @@ The specification, SDK, CLI, and all reference implementations are Apache 2.0. N
 
 <div align="center">
 
-**[Read the Spec](./specification/kapsel-protocol.md)** · **[kapsel.sh](https://kapsel.sh)** · **[GitHub](https://github.com/Kapsel-Protocol/kapsel-core)**
+**[Read the Spec](./specification/kapsel-protocol.md)** · **[kapsel.sh](https://kapsel.sh)** · **[GitHub](https://github.com/joeybuilt-official/kapsel)**
 
 </div>
