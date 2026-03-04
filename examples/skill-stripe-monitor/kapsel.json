@@ -1,0 +1,47 @@
+{
+  "kapsel": "0.2.0",
+  "name": "@kapsel/skill-stripe-monitor",
+  "version": "1.0.0",
+  "type": "skill",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "memory:read",
+    "memory:write",
+    "connections:stripe",
+    "channel:send",
+    "schedule:register",
+    "ui:register-widget",
+    "storage:read",
+    "storage:write"
+  ],
+  "displayName": "Stripe Monitor",
+  "description": "Tracks MRR, churn, and new customers. Sends daily revenue reports and alerts on significant changes.",
+  "author": "kapsel",
+  "license": "Apache-2.0",
+  "keywords": ["stripe", "revenue", "mrr", "monitoring", "billing"],
+  "minHostLevel": "standard",
+  "skillConfig": {
+    "type": "object",
+    "properties": {
+      "alertThresholdPct": {
+        "type": "number",
+        "description": "Alert when MRR changes by more than this percentage week-over-week",
+        "default": 10
+      },
+      "reportSchedule": {
+        "type": "string",
+        "description": "Cron expression for daily report (default: 8am daily)",
+        "default": "0 8 * * *"
+      },
+      "currency": {
+        "type": "string",
+        "description": "Currency code for reporting",
+        "default": "usd"
+      }
+    }
+  },
+  "resourceHints": {
+    "maxMemoryMB": 128,
+    "maxInvocationMs": 30000
+  }
+}
