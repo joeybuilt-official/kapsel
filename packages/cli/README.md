@@ -5,9 +5,9 @@ CLI for scaffolding, building, validating, and publishing [Kapsel](https://kapse
 ## Installation
 
 ```bash
-pnpm add -g @kapsel/cli
-# or use without installing:
-npx @kapsel/cli init
+npm install -g @kapsel/cli
+# or per-project
+pnpm add -D @kapsel/cli
 ```
 
 ## Commands
@@ -18,29 +18,12 @@ Scaffold a new extension interactively.
 
 ```bash
 kapsel init
-# or with flags to skip prompts:
-kapsel init --type skill --name @acme/stripe-monitor
+kapsel init my-extension-dir
 ```
 
-Creates:
-```
-stripe-monitor/
-├── kapsel.json
-├── package.json
-├── tsconfig.json
-├── src/index.ts
-├── README.md
-└── .gitignore
-```
+Prompts for: scope, name, type (skill/agent/channel/tool), description, author. Generates `kapsel.json`, `package.json`, `tsconfig.json`, and a `src/index.ts` entry point from the template.
 
-### `kapsel build`
-
-Validate manifest + compile TypeScript.
-
-```bash
-kapsel build
-kapsel build --no-validate  # skip manifest check
-```
+---
 
 ### `kapsel validate`
 
@@ -48,32 +31,46 @@ Validate `kapsel.json` without building.
 
 ```bash
 kapsel validate
-kapsel validate ./path/to/kapsel.json
+kapsel validate ./path/to/extension
 ```
+
+Checks: required fields, name format, semver versions, known capability tokens, description length.
+
+---
+
+### `kapsel build`
+
+Compile TypeScript and validate manifest.
+
+```bash
+kapsel build
+kapsel build ./path/to/extension
+kapsel build --no-validate  # skip manifest validation
+```
+
+Runs `tsc` and verifies the compiled entry point exists at the path declared in `kapsel.json`.
+
+---
 
 ### `kapsel publish`
 
 Pack and publish to a registry.
 
 ```bash
-export KAPSEL_TOKEN=your-token
 kapsel publish
 kapsel publish --registry https://my-registry.example.com
-kapsel publish --dry-run  # pack + validate, don't push
+kapsel publish --dry-run  # pack without publishing
 ```
 
-## Extension Types
+**Authentication:** Provide a publisher token via `--token` or the `KAPSEL_TOKEN` environment variable.
 
-| Type | Generated scaffold includes |
-|------|----------------------------|
-| `skill` | Tool, schedule, widget |
-| `agent` | shouldActivate, plan, executeStep |
-| `channel` | receive, send, health |
-| `tool` | Single tool handler |
-| `mcp-server` | MCP bridge activate |
+```bash
+export KAPSEL_TOKEN=your-token
+kapsel publish
+```
 
-## Environment Variables
+## See Also
 
-| Variable | Description |
-|----------|-------------|
-| `KAPSEL_TOKEN` | Publisher token for `kapsel publish` |
+- [@kapsel/sdk](../sdk) — TypeScript types and interfaces
+- [@kapsel/sdk-mock](../sdk-mock) — test extensions locally
+- [Specification](../../specification/kapsel-protocol.md) — full protocol spec

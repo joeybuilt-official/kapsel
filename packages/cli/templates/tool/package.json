@@ -1,0 +1,20 @@
+{
+  "name": "REPLACE_ME",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kapsel/sdk": "^0.2.0"
+  },
+  "devDependencies": {
+    "@kapsel/sdk-mock": "^0.2.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
