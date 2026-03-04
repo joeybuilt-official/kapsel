@@ -40,6 +40,12 @@ export interface PlanStep {
 }
 
 export interface Plan {
+  /**
+   * Monotonically increasing version. Starts at 1.
+   * Incremented each time the agent re-plans mid-execution.
+   * Host uses this to avoid replaying already-completed steps.
+   */
+  version: number;
   /** Agent's restatement of the goal. Sent to user before execution. */
   goalRestatement: string;
   steps: PlanStep[];
@@ -66,7 +72,10 @@ export interface StepResult {
   summary: string;
   toolCalls: ToolCall[];
   output?: unknown;
+  /** Whether execution can proceed to the next step */
   canContinue: boolean;
+  /** Required when canContinue is false. Explains why execution was halted. */
+  blockedReason?: string;
 }
 
 export interface ShouldActivateResult {

@@ -7,6 +7,9 @@ import type { KapselManifest, ExtensionType, CapabilityToken } from '../types/ma
 
 const VALID_TYPES: ExtensionType[] = ['agent', 'skill', 'channel', 'tool', 'mcp-server'];
 
+/** Max displayName length per §3 of the spec */
+const DISPLAY_NAME_MAX = 50;
+
 const STANDARD_CAPABILITIES = new Set<string>([
   'memory:read',
   'memory:write',
@@ -30,6 +33,7 @@ const STANDARD_CAPABILITIES = new Set<string>([
 export interface ValidationError {
   field: string;
   message: string;
+  severity?: 'error' | 'warning';
 }
 
 export interface ValidationResult {
@@ -52,7 +56,7 @@ export function validateManifest(raw: unknown): ValidationResult {
   }
 
   if (typeof m['name'] !== 'string' || !isValidPackageName(m['name'])) {
-    errors.push({ field: 'name', message: 'Must match @scope/name format (lowercase alphanumeric and hyphens)' });
+    errors.push({ field: 'name', message: 'Must match @scope/name format (lowercase alphanumeric, hyphens, and dots allowed in scope)' });
   }
 
   if (typeof m['version'] !== 'string' || !isSemver(m['version'])) {
@@ -77,7 +81,15 @@ export function validateManifest(raw: unknown): ValidationResult {
       } else if (!isValidCapability(cap)) {
         errors.push({
           field: `capabilities[${i}]`,
-          message: `Unknown capability token "${cap}". Must be a standard token or host:<hostname>:<capability> or connections:<service>`,
+          message: `Unknown capability token "${cap}". Must be a standard token, connections:<service>, or host:<hostname>:<capability>`,
+        });
+      } else if (isHostScopedCapability(cap)) {
+        // Host-scoped tokens pass format validation but require host-side verification.
+        // Emit a warning so CLI and hosts can surface this to the publisher.
+        errors.push({
+          field: `capabilities[${i}]`,
+          message: `Host-scoped capability "${cap}" is not validated by this tool. The target host must confirm this token is supported and granted.`,
+          severity: 'warning',
         });
       }
     });
@@ -85,6 +97,8 @@ export function validateManifest(raw: unknown): ValidationResult {
 
   if (typeof m['displayName'] !== 'string' || m['displayName'].length === 0) {
     errors.push({ field: 'displayName', message: 'Must be a non-empty string' });
+  } else if (m['displayName'].length > DISPLAY_NAME_MAX) {
+    errors.push({ field: 'displayName', message: `Must be ${DISPLAY_NAME_MAX} characters or fewer` });
   }
 
   if (typeof m['description'] !== 'string') {
@@ -122,15 +136,21 @@ export function validateManifest(raw: unknown): ValidationResult {
     errors.push({ field: 'mcpServer', message: 'Required for mcp-server type extensions' });
   }
 
-  return { valid: errors.length === 0, errors };
+  // Only count errors (not warnings) for validity
+  const hardErrors = errors.filter((e) => e.severity !== 'warning');
+  return { valid: hardErrors.length === 0, errors };
 }
 
 function isSemver(s: string): boolean {
   return /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$/.test(s);
 }
 
+/**
+ * Allows @scope/name where scope and name are lowercase alphanumeric,
+ * hyphens, and dots (matching npm's actual rules).
+ */
 function isValidPackageName(s: string): boolean {
-  return /^@[a-z0-9-]+\/[a-z0-9-]+$/.test(s);
+  return /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/.test(s);
 }
 
 function isValidCapability(token: string): boolean {
@@ -138,4 +158,8 @@ function isValidCapability(token: string): boolean {
   if (/^connections:[a-z0-9-]+$/.test(token)) return true;
   if (/^host:[a-z0-9-]+:[a-z0-9-:]+$/.test(token)) return true;
   return false;
+}
+
+function isHostScopedCapability(token: string): boolean {
+  return /^host:[a-z0-9-]+:[a-z0-9-:]+$/.test(token);
 }

@@ -16,6 +16,9 @@ import type { JSONSchema } from './manifest.js';
 
 export type NotificationLevel = 'info' | 'warning' | 'error';
 
+/** Extension package name in @scope/name format */
+export type ExtensionName = `@${string}/${string}`;
+
 export interface HostInfo {
   kapselVersion: string;
   complianceLevel: HostComplianceLevel;
@@ -27,10 +30,12 @@ export interface MemoryEntry {
   id: string;
   content: string;
   tags?: string[];
-  authorExtension: string;
+  /** Extension that wrote this entry. Format: @scope/name */
+  authorExtension: ExtensionName | 'mock';
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
+  /** TTL in seconds */
   ttl?: number;
 }
 
@@ -43,11 +48,12 @@ export interface ScheduleRegistration {
   name: string;
   /** 5-field cron expression */
   schedule: string;
+  /**
+   * IANA timezone string (e.g. 'America/Denver', 'UTC').
+   * Defaults to 'UTC' if not specified.
+   */
+  timezone?: string;
   handler(): Promise<void>;
-}
-
-export interface WidgetDisplayType {
-  type: 'metric' | 'chart' | 'list' | 'status' | 'custom';
 }
 
 export interface WidgetRegistration {
@@ -69,6 +75,11 @@ export interface ToolRegistration {
   hints?: {
     /** Estimated execution time in ms */
     estimatedMs?: number;
+    /**
+     * Hard timeout in ms. Host will abort and surface an error if exceeded.
+     * Defaults to host-configured limit (typically 30_000ms).
+     */
+    timeoutMs?: number;
     /** Whether this tool has external side effects */
     hasSideEffects?: boolean;
     /** Whether calling with same params produces same result */
@@ -125,6 +136,7 @@ export interface KapselSDK {
       content: string;
       tags?: string[];
       metadata?: Record<string, unknown>;
+      /** TTL in seconds */
       ttl?: number;
     }): Promise<MemoryEntry>;
     /** Requires memory:delete capability */
@@ -158,9 +170,18 @@ export interface KapselSDK {
   };
 
   events: {
-    /** Requires events:subscribe capability. Returns unsubscribe function. */
+    /**
+     * Requires events:subscribe capability.
+     * Returns an unsubscribe function.
+     * Extensions may only publish to topics in the ext.<scope>.* namespace.
+     * Subscribing to host-owned topics (e.g. task.failed) is allowed read-only.
+     */
     subscribe(topic: string, handler: (payload: unknown) => Promise<void>): () => void;
-    /** Requires events:publish capability. Topic must be in ext.<scope>.* namespace. */
+    /**
+     * Requires events:publish capability.
+     * Topic MUST be in the ext.<scope>.* namespace.
+     * Publishing to host-owned topics will throw.
+     */
     publish(topic: string, payload: unknown): Promise<void>;
     unsubscribe(topic: string): void;
   };
@@ -172,8 +193,8 @@ export interface KapselSDK {
     set<T = unknown>(key: string, value: T, options?: { ttl?: number }): Promise<void>;
     /** Requires storage:write capability */
     delete(key: string): Promise<void>;
-    /** Requires storage:read capability */
-    list(prefix?: string): Promise<string[]>;
+    /** Requires storage:read capability. Max 1000 keys returned. */
+    list(prefix?: string, options?: { limit?: number }): Promise<string[]>;
   };
 
   tools: {
