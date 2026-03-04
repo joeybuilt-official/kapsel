@@ -1,0 +1,29 @@
+{
+  "kapsel": "0.2.0",
+  "name": "@kapsel/agent-devops",
+  "version": "1.0.0",
+  "type": "agent",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "memory:read",
+    "memory:write",
+    "connections:github",
+    "connections:vercel",
+    "tasks:create",
+    "tasks:read",
+    "events:subscribe",
+    "events:publish",
+    "channel:send",
+    "storage:read",
+    "storage:write"
+  ],
+  "displayName": "DevOps Agent",
+  "description": "Handles deployment tasks, monitors build health, and responds to failing CI. Works with GitHub and Vercel.",
+  "author": "kapsel",
+  "license": "Apache-2.0",
+  "keywords": ["devops", "deployment", "github", "vercel", "ci", "builds"],
+  "minHostLevel": "full",
+  "agentHints": {
+    "taskTypes": ["deployment", "ops", "coding"]
+  }
+}
