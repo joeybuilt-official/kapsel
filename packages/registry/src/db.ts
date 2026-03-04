@@ -40,13 +40,15 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS versions (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    ext_name     TEXT    NOT NULL REFERENCES extensions(name),
-    version      TEXT    NOT NULL,
-    manifest     TEXT    NOT NULL,
-    tarball_path TEXT    NOT NULL,
-    shasum       TEXT    NOT NULL,
-    published_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    ext_name           TEXT    NOT NULL REFERENCES extensions(name),
+    version            TEXT    NOT NULL,
+    manifest           TEXT    NOT NULL,
+    tarball_path       TEXT    NOT NULL,
+    shasum             TEXT    NOT NULL,
+    deprecated         INTEGER NOT NULL DEFAULT 0,
+    deprecation_reason TEXT,
+    published_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     UNIQUE(ext_name, version)
   );
 
@@ -62,6 +64,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_versions_ext ON versions(ext_name);
   CREATE INDEX IF NOT EXISTS idx_downloads_ext ON downloads(ext_name);
 `);
+
+// Migrate existing databases: add deprecated columns if not present
+try {
+  db.exec(`ALTER TABLE versions ADD COLUMN deprecated INTEGER NOT NULL DEFAULT 0`);
+} catch { /* column already exists */ }
+try {
+  db.exec(`ALTER TABLE versions ADD COLUMN deprecation_reason TEXT`);
+} catch { /* column already exists */ }
 
 // ---- Queries ----
 
@@ -84,6 +94,8 @@ export interface VersionRow {
   manifest: string;
   tarball_path: string;
   shasum: string;
+  deprecated: number;       // SQLite boolean: 0 | 1
+  deprecation_reason: string | null;
   published_at: number;
 }
 
@@ -100,7 +112,7 @@ export const queries = {
     'SELECT version FROM versions WHERE ext_name = ? ORDER BY published_at ASC'
   ),
 
-  searchExtensions: db.prepare<[string, string, number, number], ExtensionRow>(`
+  searchExtensions: db.prepare<[string, string, string, string, string, string, number, number], ExtensionRow>(`
     SELECT e.* FROM extensions e
     WHERE (? = '' OR e.name LIKE '%' || ? || '%' OR e.description LIKE '%' || ? || '%' OR e.keywords LIKE '%' || ? || '%')
     AND  (? = '' OR e.type = ?)
@@ -108,7 +120,7 @@ export const queries = {
     LIMIT ? OFFSET ?
   `),
 
-  countSearch: db.prepare<[string, string], { count: number }>(`
+  countSearch: db.prepare<[string, string, string, string, string, string], { count: number }>(`
     SELECT COUNT(*) as count FROM extensions e
     WHERE (? = '' OR e.name LIKE '%' || ? || '%' OR e.description LIKE '%' || ? || '%' OR e.keywords LIKE '%' || ? || '%')
     AND  (? = '' OR e.type = ?)
@@ -137,6 +149,17 @@ export const queries = {
   insertVersion: db.prepare(`
     INSERT INTO versions (ext_name, version, manifest, tarball_path, shasum)
     VALUES (?, ?, ?, ?, ?)
+  `),
+
+  /**
+   * Set or clear deprecation on a specific version.
+   * deprecated: 1 to deprecate, 0 to un-deprecate.
+   * reason: string when deprecating, NULL when un-deprecating.
+   */
+  setDeprecation: db.prepare(`
+    UPDATE versions
+    SET deprecated = ?, deprecation_reason = ?
+    WHERE ext_name = ? AND version = ?
   `),
 
   recordDownload: db.prepare(`

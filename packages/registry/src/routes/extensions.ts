@@ -26,6 +26,9 @@ export function extensionsRouter(): RouterType {
     const weekly = queries.weeklyDownloads.get(fullName)?.count ?? 0;
     const total = queries.totalDownloads.get(fullName)?.count ?? 0;
 
+    // Surface deprecation status of the latest version
+    const latestRow = queries.getVersion.get(fullName, ext.latest);
+
     res.json({
       name: ext.name,
       type: ext.type,
@@ -37,6 +40,7 @@ export function extensionsRouter(): RouterType {
       versions,
       keywords: JSON.parse(ext.keywords) as string[],
       downloads: { weekly, total },
+      deprecated: latestRow ? Boolean(latestRow.deprecated) : false,
     });
   });
 
@@ -54,6 +58,50 @@ export function extensionsRouter(): RouterType {
       tarballUrl: `${REGISTRY_URL}/extensions/${scope}/${name}/${version}.tar.gz`,
       publishedAt: row.published_at,
       shasum: row.shasum,
+      deprecated: Boolean(row.deprecated),
+      deprecationReason: row.deprecation_reason ?? null,
+    });
+  });
+
+  // PATCH /extensions/:scope/:name/:version
+  // Deprecate or un-deprecate a specific version.
+  router.patch('/:scope/:name/:version', async (req: Request, res: Response) => {
+    const { scope, name, version } = req.params as { scope: string; name: string; version: string };
+    const fullName = `@${scope}/${name}`;
+
+    // Auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader?.startsWith('Bearer ')) {
+      res.status(401).json({ error: 'Authorization required' }); return;
+    }
+    const publisher = await verifyPublisherToken(authHeader.slice(7));
+    if (!publisher) { res.status(401).json({ error: 'Invalid token' }); return; }
+    if (publisher.scope !== scope) {
+      res.status(403).json({ error: `Token scope "${publisher.scope}" cannot modify @${scope}` }); return;
+    }
+
+    // Version must exist
+    const existing = queries.getVersion.get(fullName, version);
+    if (!existing) { res.status(404).json({ error: 'Version not found' }); return; }
+
+    // Validate body
+    const body = req.body as { deprecated?: unknown; deprecationReason?: unknown };
+    if (typeof body.deprecated !== 'boolean') {
+      res.status(422).json({ error: '"deprecated" field (boolean) is required' }); return;
+    }
+
+    const deprecated = body.deprecated;
+    const reason = deprecated
+      ? (typeof body.deprecationReason === 'string' ? body.deprecationReason : null)
+      : null;
+
+    queries.setDeprecation.run(deprecated ? 1 : 0, reason, fullName, version);
+
+    res.json({
+      name: fullName,
+      version,
+      deprecated,
+      deprecationReason: reason,
     });
   });
 
@@ -72,6 +120,13 @@ export function extensionsRouter(): RouterType {
     queries.recordDownload.run(fullName, version);
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${path.basename(row.tarball_path)}"`);
+    // Warn via header if version is deprecated
+    if (row.deprecated) {
+      res.setHeader('X-Kapsel-Deprecated', 'true');
+      if (row.deprecation_reason) {
+        res.setHeader('X-Kapsel-Deprecation-Reason', row.deprecation_reason);
+      }
+    }
     fs.createReadStream(row.tarball_path).pipe(res);
   });
 
@@ -105,16 +160,13 @@ export function extensionsRouter(): RouterType {
     const tarballPath = path.join(TARBALLS_DIR, `${scope}-${name}-${version}.tar.gz`);
     fs.writeFileSync(tarballPath, body);
 
-    // Extract and validate manifest from tarball
-    // For the reference impl, we trust the request body for manifest and validate it.
-    // A production registry should extract kapsel.json from the tarball.
+    // Extract and validate manifest
     let manifest: unknown;
     try {
       const manifestHeader = req.headers['x-kapsel-manifest'];
       if (typeof manifestHeader === 'string') {
         manifest = JSON.parse(manifestHeader);
       } else {
-        // Minimal manifest from URL params for reference impl
         manifest = { kapsel: '0.2.0', name: fullName, version, type: 'skill', entry: './dist/index.js', capabilities: [], displayName: name, description: '', author: scope, license: 'MIT' };
       }
     } catch {
