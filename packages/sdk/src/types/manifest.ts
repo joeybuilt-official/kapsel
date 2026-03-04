@@ -60,6 +60,21 @@ export interface JSONSchema {
   [key: string]: unknown;
 }
 
+/**
+ * Informational tool declaration for static discovery (§3.1).
+ *
+ * Hosts MUST NOT use this as a substitute for runtime activation.
+ * The authoritative tool list is only available after activate() completes.
+ * This field exists so registries and marketplaces can surface tool names
+ * without activating every installed extension.
+ */
+export interface ManifestToolHint {
+  /** Tool name. Must match the name passed to sdk.registerTool(). */
+  name: string;
+  /** Short description shown in registry and marketplace UI. Max 500 characters. */
+  description: string;
+}
+
 export interface KapselManifest {
   /** Protocol version this extension targets. Must be valid semver. */
   kapsel: string;
@@ -110,4 +125,27 @@ export interface KapselManifest {
   resourceHints?: ResourceHints;
   /** Informational only. Hosts must not enforce peer deps. */
   peerExtensions?: string[];
+  /**
+   * Informational tool declarations for static discovery (§3.1).
+   *
+   * Hosts MUST NOT use this as a substitute for activation-time tool registration.
+   * The authoritative tool list is only available after activate() completes.
+   * This field exists so registries and marketplaces can surface tool names
+   * before an extension is installed or activated.
+   *
+   * Tool names listed here SHOULD match names passed to sdk.registerTool() at runtime,
+   * but hosts MUST NOT enforce this constraint — it is informational only.
+   */
+  tools?: ManifestToolHint[];
+  /**
+   * Informational list of Event Bus topics this extension publishes to (§7.4).
+   *
+   * All topics MUST be within the ext.<scope>.* namespace.
+   * Hosts MUST NOT use this as an allowlist — topic enforcement happens at runtime.
+   * This field exists so developers and registry users can understand an extension's
+   * event surface without activating it.
+   *
+   * Example: ["ext.acme.stripe-monitor.mrr-alert", "ext.acme.stripe-monitor.churn-detected"]
+   */
+  publishTopics?: string[];
 }

@@ -1,6 +1,13 @@
 /**
  * Manifest validation utilities.
  * Used by the CLI and hosts to validate kapsel.json.
+ *
+ * NOTE on entry path validation (§3.3 rule 5):
+ * This function validates manifest structure only. It does NOT verify that the
+ * entry path resolves within the package root. Hosts MUST additionally check
+ * entry path existence at install time when the extension package is present.
+ * The CLI (kapsel validate) SHOULD resolve and check the path against the
+ * local filesystem during development.
  */
 
 import type { KapselManifest, ExtensionType, CapabilityToken } from '../types/manifest.js';
@@ -56,7 +63,11 @@ export function validateManifest(raw: unknown): ValidationResult {
   }
 
   if (typeof m['name'] !== 'string' || !isValidPackageName(m['name'])) {
-    errors.push({ field: 'name', message: 'Must match @scope/name format (lowercase alphanumeric, hyphens, and dots allowed in scope)' });
+    errors.push({
+      field: 'name',
+      message:
+        'Must match @scope/name format. Lowercase alphanumeric, hyphens, and dots are allowed in both scope and name segments.',
+    });
   }
 
   if (typeof m['version'] !== 'string' || !isSemver(m['version'])) {
@@ -67,6 +78,10 @@ export function validateManifest(raw: unknown): ValidationResult {
     errors.push({ field: 'type', message: `Must be one of: ${VALID_TYPES.join(', ')}` });
   }
 
+  // NOTE: entry is validated as a non-empty string only.
+  // Path existence within the package root cannot be checked here —
+  // that is the responsibility of the CLI (at build/validate time) and
+  // the host (at install time). See §3.3 rule 5.
   if (typeof m['entry'] !== 'string' || m['entry'].length === 0) {
     errors.push({ field: 'entry', message: 'Must be a non-empty string path to the entry point' });
   }
@@ -93,6 +108,23 @@ export function validateManifest(raw: unknown): ValidationResult {
         });
       }
     });
+
+    // Warn if events:publish is declared but no publishTopics are listed.
+    // publishTopics is informational — its absence doesn't block install, but
+    // it degrades static discoverability of the extension's event surface.
+    const declaresPublish = (m['capabilities'] as unknown[]).includes('events:publish');
+    const hasPublishTopics =
+      Array.isArray(m['publishTopics']) && (m['publishTopics'] as unknown[]).length > 0;
+    if (declaresPublish && !hasPublishTopics) {
+      errors.push({
+        field: 'publishTopics',
+        message:
+          'Extension declares events:publish but does not list publishTopics[]. ' +
+          'Consider adding an informational publishTopics[] array so registry users and developers ' +
+          'can understand the extension\'s event surface without activating it (§7.4).',
+        severity: 'warning',
+      });
+    }
   }
 
   if (typeof m['displayName'] !== 'string' || m['displayName'].length === 0) {
@@ -147,7 +179,7 @@ function isSemver(s: string): boolean {
 
 /**
  * Allows @scope/name where scope and name are lowercase alphanumeric,
- * hyphens, and dots (matching npm's actual rules).
+ * hyphens, and dots — allowed in both scope and name segments (matching npm's rules).
  */
 function isValidPackageName(s: string): boolean {
   return /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/.test(s);

@@ -1,6 +1,6 @@
 # Kapsel Protocol Specification
 
-**Version:** 0.2.0-draft  
+**Version:** 0.2.1-draft  
 **Status:** Draft  
 **Date:** March 2026  
 **Repository:** https://github.com/joeybuilt-official/kapsel
@@ -162,6 +162,7 @@ interface KapselManifest {
 
   // Scoped package name. MUST follow @scope/name format.
   // Allowed characters: lowercase alphanumeric, hyphens, and dots.
+  // Dots are allowed in both scope and name segments.
   name: string;
 
   // Extension version. MUST be a valid semver string.
@@ -233,6 +234,30 @@ interface KapselManifestOptional {
 
   // Informational only — hosts MUST NOT enforce peer deps.
   peerExtensions?: string[];
+
+  // Informational tool declarations for static discovery.
+  // Hosts MUST NOT use this as a substitute for activation-time tool registration.
+  // The authoritative tool list is only available after activate() completes.
+  // Use this field to enable registries and marketplaces to surface tool names
+  // without installing or activating the extension.
+  //
+  // Tool names listed here SHOULD match names passed to sdk.registerTool() at runtime,
+  // but hosts MUST NOT enforce this constraint.
+  tools?: ManifestToolHint[];
+
+  // Informational list of Event Bus topics this extension publishes to (§7.4).
+  // All topics MUST be within the ext.<scope>.* namespace.
+  // Hosts MUST NOT use this as an allowlist — topic enforcement happens at runtime.
+  // Use this field to describe the extension's event surface to developers and
+  // registry users without requiring activation.
+  //
+  // Example: ["ext.acme.stripe-monitor.mrr-alert"]
+  publishTopics?: string[];
+}
+
+interface ManifestToolHint {
+  name: string;        // Must match the name used in sdk.registerTool().
+  description: string; // Max 500 characters.
 }
 
 interface MCPServerConfig {
@@ -262,7 +287,7 @@ Required validations:
 2. `name` matches `^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$`
 3. `version` is a valid semver string
 4. `type` is one of the five defined types
-5. `entry` path exists within the package
+5. `entry` is a non-empty string **and** the path exists within the package root (hosts MUST verify at install time; the SDK `validateManifest()` function checks structure only and cannot check path existence without the package present)
 6. All `capabilities` tokens are recognized (unknown tokens are rejected; host-scoped tokens emit a warning — see §4.3)
 7. `displayName` is ≤ 50 characters
 8. `description` is ≤ 280 characters
@@ -283,7 +308,8 @@ Required validations:
     "connections:stripe",
     "channel:send",
     "schedule:register",
-    "ui:register-widget"
+    "ui:register-widget",
+    "events:publish"
   ],
   "displayName": "Stripe Monitor",
   "description": "Tracks MRR, churn, and new customers. Sends daily revenue reports and alerts on significant changes.",
@@ -293,6 +319,14 @@ Required validations:
   "repository": "https://github.com/acme/stripe-monitor",
   "keywords": ["stripe", "revenue", "mrr", "monitoring"],
   "minHostLevel": "standard",
+  "tools": [
+    { "name": "stripe_get_mrr", "description": "Gets current MRR from Stripe. Returns amount in cents and currency." },
+    { "name": "stripe_list_customers", "description": "Lists recent Stripe customers with churn risk scores." }
+  ],
+  "publishTopics": [
+    "ext.acme.stripe-monitor.mrr-alert",
+    "ext.acme.stripe-monitor.churn-detected"
+  ],
   "skillConfig": {
     "type": "object",
     "properties": {
@@ -438,13 +472,44 @@ Hosts MUST enforce these minimum limits per worker:
 
 ### §5.4 Worker Lifecycle
 
+#### Worker Model
+
+Kapsel defines two worker models. The required model depends on compliance level:
+
+| Model | Description | Required at |
+|-------|-------------|-------------|
+| **Ephemeral** | A new worker is spawned per tool invocation. `activate()` runs on every spawn. Lower resource overhead; higher per-call latency. `sdk.storage` state is not available between calls in this model — extensions MUST NOT rely on in-memory state persisting across invocations. | Core |
+| **Persistent** | One worker is spawned per enabled extension and kept alive. `activate()` runs once. The host sends `invoke.*` messages to the running worker. Tool calls, cron jobs, and widget data requests do not re-activate the extension. Recommended for Standard and required for Full. | Full |
+
+Hosts implementing Standard compliance SHOULD use the persistent model. Hosts implementing Full compliance MUST use the persistent model.
+
+**Extension authors targeting Core hosts MUST NOT assume persistent worker state.** Extensions that require persistent in-process state (e.g., caching, stateful connections) MUST use `sdk.storage` instead.
+
+#### Lifecycle States
+
 1. **Spawn** — Host spawns worker on extension activation.
 2. **Warm** — `activate(sdk)` is called. Extension registers tools, schedules, widgets.
 3. **Ready** — Worker is available.
 4. **Invoke** — Host sends request; worker processes and responds.
 5. **Idle** — Worker waits. Host MAY suspend to reclaim resources.
-6. **Crash** — Unhandled error. If crash count ≤ 3 in 5 minutes: restart. If > 3: disable extension and notify user.
+6. **Crash** — Unhandled error. See crash behavior below.
 7. **Shutdown** — `deactivate()` called, worker terminates.
+
+#### Activation Failure
+
+If `activate()` throws or does not complete within the host's activation timeout (default: 30 seconds):
+
+1. The extension is marked as `crashed`.
+2. The host MUST publish an `extension.crashed` event on the Event Bus with `{ extensionName, crashCount }`.
+3. The extension is NOT automatically retried until the user re-enables it or the host restarts.
+4. The host MUST surface a user-visible error indicating the extension failed to activate.
+
+#### Runtime Crash Recovery
+
+For crashes that occur during invocation (after successful activation):
+
+- If crash count ≤ 3 within 5 minutes: restart worker and retry the failed invocation once.
+- If crash count > 3 within 5 minutes: disable the extension, publish `extension.crashed`, and notify the user.
 
 ### §5.5 Security Constraints
 
@@ -725,6 +790,12 @@ Examples:
 
 Extensions MUST only publish to topics within their own `ext.<scope>.*` namespace. An extension from `@acme/stripe-monitor` MUST NOT publish to `ext.otherscope.*` topics. Hosts MUST enforce this scope check at call time.
 
+#### Informational Topic Declaration
+
+Extensions that declare `events:publish` SHOULD list their intended publish topics in `publishTopics[]` in the manifest (§3.2). This field is informational — hosts MUST NOT use it as a runtime allowlist. Its purpose is to allow developers, registry users, and marketplace UIs to understand an extension's event surface without activating it.
+
+The `validateManifest()` SDK function emits a warning (not an error) when `events:publish` is declared but `publishTopics[]` is absent or empty.
+
 #### Standard Host Topics
 
 | Topic | Published When | Payload |
@@ -737,7 +808,7 @@ Extensions MUST only publish to topics within their own `ext.<scope>.*` namespac
 | `channel.health.changed` | Channel health changes | `{ channelId, healthy, reason }` |
 | `extension.activated` | Extension completes activation | `{ extensionName, version }` |
 | `extension.deactivated` | Extension is deactivated | `{ extensionName, reason }` |
-| `extension.crashed` | Extension worker crashes | `{ extensionName, crashCount }` |
+| `extension.crashed` | Extension worker crashes or fails activation | `{ extensionName, crashCount }` |
 | `connection.added` | Service connection installed | `{ service, connectionId }` |
 | `connection.removed` | Service connection removed | `{ service, connectionId }` |
 | `memory.written` | Memory entry created or updated | `{ entryId, tags }` |
@@ -770,6 +841,30 @@ interface MemoryEntry {
 - `sdk.memory.read({ query, tags?, limit? })` — semantic search, optional tag filter, default limit 10, max 100.
 - `sdk.memory.write({ content, tags?, metadata?, ttl? })` — create or update. Providing `metadata.id` of an owned entry updates it.
 - `sdk.memory.delete({ id })` — delete an owned entry.
+
+### §7.6 Extension-Private Storage
+
+Extension-private storage is a key-value store scoped to an individual extension instance. Unlike the Memory Layer (which is shared and workspace-scoped), storage is private to the extension that writes it.
+
+**Key namespacing:** Hosts MUST namespace storage keys internally as:
+
+```
+ext:<extensionName>:<workspaceId>:<key>
+```
+
+where `<extensionName>` is the extension's full scoped package name (e.g. `@acme/stripe-monitor`) and `<workspaceId>` is the workspace the extension is installed in. Extensions MUST NOT include this prefix in keys they pass to `sdk.storage` — the host applies it transparently.
+
+**Scope:** Storage is scoped per `(extensionName, workspaceId)`. An extension cannot read another extension's storage keys. An extension installed in workspace A cannot read its own keys from workspace B.
+
+**Recommended backend:** Redis (key-value with TTL support). Hosts MAY use any durable K/V store. The `storage:read` and `storage:write` capability tokens MUST be declared to use this surface.
+
+**API:**
+- `sdk.storage.get(key)` — returns stored value or null if not found.
+- `sdk.storage.set(key, value, options?)` — stores value with optional TTL in seconds.
+- `sdk.storage.delete(key)` — deletes a key.
+- `sdk.storage.list(prefix?, options?)` — lists keys matching an optional prefix.
+
+**Size limits:** Per §5.3, the host MUST enforce a maximum of 100 MB of extension-private storage per extension instance.
 
 ---
 
@@ -942,6 +1037,8 @@ On task completion, the host calculates a quality score (0–10) by task type. A
 ```typescript
 interface CommonLifecycleHooks {
   // Required. Registers tools, schedules, widgets, subscriptions.
+  // Called once on worker spawn (persistent model) or on every invocation (ephemeral model).
+  // See §5.4 for worker model definitions.
   activate(sdk: KapselSDK): Promise<void>;
 
   // Optional. Clean up external connections, flush writes.
@@ -952,6 +1049,14 @@ interface CommonLifecycleHooks {
   onConfigUpdate?(newConfig: unknown): Promise<void>;
 }
 ```
+
+**Activation failure behavior:** If `activate()` throws or times out:
+1. The extension is marked as `crashed` and not made ready.
+2. The host MUST publish `extension.crashed` on the Event Bus.
+3. The host MUST surface a user-visible error.
+4. The extension is NOT retried automatically — it requires a user re-enable action or host restart.
+
+See §5.4 for the full crash and recovery policy.
 
 ### §9.2 Channel-Specific Hooks
 
@@ -969,7 +1074,7 @@ interface ChannelLifecycleHooks extends CommonLifecycleHooks {
 - `activate()` MUST complete before the extension is considered ready.
 - `deactivate()` is best-effort — it may not be called on abnormal host exit.
 - `onConfigUpdate()` MUST be called before the new config takes effect in subsequent invocations.
-- If `activate()` throws, the extension is considered failed and not retried until reinstall or host restart.
+- If `activate()` throws, the extension is marked crashed. See §9.1 and §5.4.
 
 ---
 
@@ -1042,6 +1147,23 @@ sdk.host.version         // e.g., "1.4.2"
 
 An extension MAY declare a minimum host compliance level via `minHostLevel` in its manifest. The host MUST enforce this at **install time** by rejecting the installation with `COMPLIANCE_INSUFFICIENT` if its compliance level is below the declared minimum.
 
+**Install rejection response:** When `minHostLevel` exceeds the host's compliance level, the host MUST return:
+
+```json
+{
+  "error": {
+    "code": "COMPLIANCE_INSUFFICIENT",
+    "message": "This extension requires host compliance level 'full'. This host is 'standard'.",
+    "details": {
+      "required": "full",
+      "actual": "standard"
+    }
+  }
+}
+```
+
+The HTTP status code MUST be `400`. The `details` object MUST include both `required` and `actual` compliance levels so the user can understand why installation was rejected.
+
 For extensions that want to conditionally use features based on what the host supports at runtime, the following pattern applies:
 
 ```typescript
@@ -1100,6 +1222,26 @@ Body: .tar.gz package
 409: Version already exists
 422: Manifest validation failed
 ```
+
+#### Install Validation
+
+When a host installs an extension, it MUST validate the manifest before calling `activate()`. If the extension's `minHostLevel` exceeds the host's compliance level, the host MUST reject the install and MUST NOT call `activate()`.
+
+```
+Install rejection response (400):
+{
+  "error": {
+    "code": "COMPLIANCE_INSUFFICIENT",
+    "message": "This extension requires host compliance level 'full'. This host is 'standard'.",
+    "details": {
+      "required": "full",
+      "actual": "standard"
+    }
+  }
+}
+```
+
+See §11.4 for the full install rejection contract.
 
 #### Get Extension Metadata
 
@@ -1280,6 +1422,7 @@ Minimum viable Kapsel host.
 - Lifecycle hooks: `activate`, `deactivate` (§9)
 - All standard error codes including `COMPLIANCE_INSUFFICIENT` (§6.4)
 - Message protocol for supported extension types (§6)
+- Ephemeral or persistent worker model (§5.4)
 
 ### §14.2 Standard
 
@@ -1292,11 +1435,13 @@ Full-featured host capable of multi-extension workflows.
 - Task Router with confidence-based routing (§7.2)
 - Channel Router with health-based failover (§7.3)
 - Memory Layer (§7.5)
+- Extension-private Storage with namespaced keys (§7.6)
 - Agent Contract: `shouldActivate`, `plan`, `executeStep`, `verifyStep` (§8)
 - One-way door protocol (§8.4)
 - Quality scoring for standard task types (§8.6)
 - Registry integration: install from a registry (§12)
-- `minHostLevel` enforcement at install time (§11.4)
+- `minHostLevel` enforcement at install time with structured error response (§11.4)
+- Persistent worker model RECOMMENDED (§5.4)
 
 ### §14.3 Full
 
@@ -1310,6 +1455,7 @@ Production-grade host supporting autonomous multi-agent workflows.
 - All lifecycle hooks including `onConfigUpdate` (§9)
 - Complete retry policy including `COMPLIANCE_INSUFFICIENT` (§10.3)
 - Runtime capability negotiation: `NOT_IMPLEMENTED` on unsupported SDK calls (§11.4)
+- Persistent worker model REQUIRED (§5.4)
 
 ### §14.4 Declaring Compliance
 
@@ -1473,4 +1619,4 @@ type NotificationLevel = "info" | "warning" | "error";
 
 ---
 
-*Kapsel Protocol v0.2.0-draft — Apache 2.0 — https://github.com/joeybuilt-official/kapsel*
+*Kapsel Protocol v0.2.1-draft — Apache 2.0 — https://github.com/joeybuilt-official/kapsel*

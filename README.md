@@ -5,7 +5,7 @@
 **The open standard for AI extension packaging, discovery, isolation, and execution.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Spec Version](https://img.shields.io/badge/spec-v0.2.0--draft-orange.svg)](./specification/kapsel-protocol.md)
+[![Spec Version](https://img.shields.io/badge/spec-v0.2.1--draft-orange.svg)](./specification/kapsel-protocol.md)
 [![Website](https://img.shields.io/badge/web-kapsel.sh-black.svg)](https://kapsel.sh)
 
 [Specification](#specification) · [Why Kapsel](#why-kapsel) · [Quick Start](#quick-start) · [Architecture](#architecture) · [Contributing](#contributing)
@@ -128,7 +128,10 @@ kapsel init
   "displayName": "Stripe Monitor",
   "description": "Tracks MRR, alerts on churn, reports daily revenue.",
   "author": "you",
-  "license": "MIT"
+  "license": "MIT",
+  "tools": [
+    { "name": "stripe_get_mrr", "description": "Gets current MRR from Stripe." }
+  ]
 }
 ```
 
@@ -297,11 +300,11 @@ Key sections:
 | Section | What It Covers |
 |---------|----------------|
 | §2 Extension Types | Agent, Skill, Channel, Tool, MCP Server |
-| §3 Manifest Schema | `kapsel.json` — required and optional fields |
+| §3 Manifest Schema | `kapsel.json` — required and optional fields, including `tools[]` and `publishTopics[]` |
 | §4 Capability Model | 18 standard tokens + host-specific extensions |
-| §5 Isolation Contract | Process isolation, resource limits, crash containment |
+| §5 Isolation Contract | Process isolation, resource limits, worker models (ephemeral vs persistent) |
 | §6 Message Protocol | Request/response, events, transport-agnostic |
-| §7 Interaction Model | Tool Registry, Task Router, Channel Router, Event Bus, Memory |
+| §7 Interaction Model | Tool Registry, Task Router, Channel Router, Event Bus, Memory, Storage |
 | §8 Agent Contract | Planning, routing, confidence scoring, multi-agent coordination |
 | §12 Registry Protocol | HTTP API for publishing and discovering extensions |
 | §14 Compliance Levels | Core → Standard → Full |
@@ -363,6 +366,7 @@ kapsel/
 | @kapsel/cli | ✅ Done | Scaffold, build, validate, publish |
 | @kapsel/registry | ✅ Done | Reference registry server |
 | Examples | ✅ Done | skill-stripe-monitor, agent-devops, channel-telegram |
+| Protocol spec v0.2.1 | ✅ Done | Spec gaps from Plexo migration: worker model, storage namespacing, activation failure, install rejection shape, static tool discovery |
 | First host implementation | 🔨 In progress | First Full-compliance host — opens the extension ecosystem |
 | Registry deprecation API | ✅ Done | `PATCH /extensions/:scope/:name/:version` to mark versions unsafe |
 | Second host implementation | Planned | Required for spec v1.0 — validates the protocol is host-agnostic |
