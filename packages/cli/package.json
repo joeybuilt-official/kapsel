@@ -2,12 +2,15 @@
   "name": "@kapsel/cli",
   "version": "0.2.0",
   "description": "CLI for scaffolding, building, and publishing Kapsel extensions",
+  "license": "Apache-2.0",
+  "author": "Joeybuilt LLC",
   "type": "module",
   "bin": {
     "kapsel": "./dist/bin/kapsel.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -31,11 +34,9 @@
     "@types/tar": "^6.1.0",
     "@types/prompts": "^2.4.0"
   },
-  "files": ["dist", "README.md"],
-  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Kapsel-Protocol/kapsel-core",
+    "url": "https://github.com/joeybuilt-official/kapsel",
     "directory": "packages/cli"
   }
 }

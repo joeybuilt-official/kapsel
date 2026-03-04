@@ -1,8 +1,14 @@
 {
-  "name": "kapsel-core",
+  "name": "kapsel",
   "private": true,
   "version": "0.0.0",
   "description": "Kapsel protocol monorepo — spec, SDK, CLI, registry, and examples",
+  "license": "Apache-2.0",
+  "author": "Joeybuilt LLC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joeybuilt-official/kapsel"
+  },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"

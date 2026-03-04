@@ -2,9 +2,12 @@
   "name": "@kapsel/registry",
   "version": "0.2.0",
   "description": "Reference Kapsel registry server",
+  "license": "Apache-2.0",
+  "author": "Joeybuilt LLC",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -29,11 +32,9 @@
     "@types/multer": "^1.4.0",
     "@types/tar": "^6.1.0"
   },
-  "files": ["dist", "README.md"],
-  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Kapsel-Protocol/kapsel-core",
+    "url": "https://github.com/joeybuilt-official/kapsel",
     "directory": "packages/registry"
   }
 }
