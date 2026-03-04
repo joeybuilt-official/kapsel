@@ -139,7 +139,6 @@ import type { KapselSDK } from '@kapsel/sdk';
 
 export async function activate(sdk: KapselSDK): Promise<void> {
 
-  // Register a tool that agents can invoke
   sdk.registerTool({
     name: 'stripe_get_mrr',
     description: 'Gets current MRR from Stripe. Returns amount in cents and currency.',
@@ -149,6 +148,7 @@ export async function activate(sdk: KapselSDK): Promise<void> {
         currency: { type: 'string', default: 'usd' }
       }
     },
+    hints: { timeoutMs: 5000, idempotent: true },
     handler: async (params, context) => {
       const creds = await sdk.connections.getCredentials('stripe');
       // ... fetch MRR from Stripe API
@@ -156,10 +156,10 @@ export async function activate(sdk: KapselSDK): Promise<void> {
     }
   });
 
-  // Register a cron job
   sdk.registerSchedule({
     name: 'daily_mrr_report',
     schedule: '0 8 * * *',
+    timezone: 'America/New_York',
     handler: async () => {
       const mrr = await sdk.tools.invoke('stripe_get_mrr', {});
       await sdk.channel.send({
@@ -169,7 +169,6 @@ export async function activate(sdk: KapselSDK): Promise<void> {
     }
   });
 
-  // Register a dashboard widget
   sdk.registerWidget({
     name: 'mrr_card',
     displayName: 'Monthly Recurring Revenue',
@@ -364,9 +363,10 @@ kapsel-core/
 | @kapsel/cli | ✅ Done | Scaffold, build, validate, publish |
 | @kapsel/registry | ✅ Done | Reference registry server |
 | Examples | ✅ Done | skill-stripe-monitor, agent-devops, channel-telegram |
-| Reference host (Plexo) | 🔨 Building | First Level 3 (Full) implementation |
-| Second host implementation | Planned | Required for spec v1.0 |
-| Spec v1.0 | Planned | Stable after 2+ hosts, 50+ extensions, public comment |
+| First host implementation | 🔨 In progress | First Full-compliance host — opens the extension ecosystem |
+| Registry deprecation API | Planned | `PATCH /extensions/:scope/:name/:version` to mark versions unsafe |
+| Second host implementation | Planned | Required for spec v1.0 — validates the protocol is host-agnostic |
+| Spec v1.0 | Planned | Stable after 2+ hosts, 50+ extensions, public comment period |
 
 ---
 
@@ -382,14 +382,6 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 - Build a host implementation (any compliance level)
 - Build extensions and report friction points
 - Join the discussion in GitHub Issues
-
----
-
-## Origin
-
-Kapsel was created by the [Plexo](https://plexo.dev) project — a self-hosted AI agentic platform. It was extracted as an independent standard because the extension contract is useful far beyond any single platform.
-
-The spec is maintained independently. Plexo is the first Level 3 host implementation.
 
 ---
 
